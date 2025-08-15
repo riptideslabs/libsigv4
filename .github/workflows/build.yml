@@ -13,8 +13,8 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      # - name: Install prerequisites
-      #   run: sudo apt-get install -y libssl-dev check
+      - name: Install prerequisites
+        run: sudo apt-get install -y check
 
       - name: Build tests
         run: make test
