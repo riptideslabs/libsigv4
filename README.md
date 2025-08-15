@@ -1,22 +1,30 @@
 # AWS SigV4 C Library
 
+[![Build](https://github.com/riptideslabs/libsigv4/actions/workflows/build.yml/badge.svg)](https://github.com/riptideslabs/libsigv4/actions/workflows/build.yml)
+
 This project provides a C implementation of AWS Signature Version 4 (SigV4) signing, suitable for use in embedded, kernel, or user-space applications. It includes a shared library and an example application demonstrating usage.
 
 ## Features
 - AWS SigV4 signing for HTTP requests
-- OpenSSL integration for cryptographic operations
+- No dynamic memory allocations
+- Pluggable cryptographic backend integration (not limited to OpenSSL)
 - Simple API for integration into C projects
-- Example usage included
+- Example usage and tests included
 - System header configurability via `SIGV4_SYSTEM_HEADER`
 
 ## Building
 
 ### Prerequisites
 - GCC or compatible C compiler
-- OpenSSL development libraries
 - `pkg-config` utility
+- [OpenSSL](https://github.com/openssl/openssl) for testing, and examples
+- [libcheck](https://github.com/libcheck/check) for testing
 
 ### Build Instructions
+
+```sh
+sudo apt install libssl-dev check
+```
 
 To build the shared library and example application, run:
 
@@ -51,10 +59,10 @@ Include the header in your application:
 #include "sigv4.h"
 ```
 
-Link against the shared library and OpenSSL:
+Link against the shared library and your selected crypto backend:
 
 ```
--L. -lsigv4 $(pkg-config --libs libssl)
+-L. -lsigv4 [crypto backend linkage]
 ```
 
 ### Example
@@ -65,3 +73,7 @@ See `LICENSE` for details.
 
 ## Contributing
 Pull requests and issues are welcome!
+
+## Acknowledgments
+
+Special thanks to Shi Bai, who created the original version of this library: https://github.com/sidbai/aws-sigv4-c
