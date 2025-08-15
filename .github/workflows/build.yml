@@ -20,4 +20,4 @@ jobs:
         run: make test
 
       - name: Run tests
-        run: ./test
+        run: LD_LIBRARY_PATH=./ ./test
