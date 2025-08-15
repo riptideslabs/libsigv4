@@ -9,9 +9,9 @@ int HMAC_SHA256(const unsigned char *data, size_t data_len,
                 unsigned char *out, size_t *out_len)
 {
     unsigned int len = 0;
-    HMAC(EVP_sha256(), key, key_len, data, data_len, out, &len);
+    char *ac = HMAC(EVP_sha256(), key, key_len, data, data_len, out, &len);
     *out_len = len;
-    return 0;
+    return (ac != NULL) ? 0 : -1;
 }
 
 int main()
