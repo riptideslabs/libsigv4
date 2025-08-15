@@ -6,7 +6,7 @@ This project provides a C implementation of AWS Signature Version 4 (SigV4) sign
 - AWS SigV4 signing for HTTP requests
 - Pluggable cryptographic backend integration (not limited to OpenSSL)
 - Simple API for integration into C projects
-- Example usage included
+- Example usage and tests included
 - System header configurability via `SIGV4_SYSTEM_HEADER`
 
 ## Building
@@ -14,8 +14,8 @@ This project provides a C implementation of AWS Signature Version 4 (SigV4) sign
 ### Prerequisites
 - GCC or compatible C compiler
 - `pkg-config` utility
-- OpenSSL for testing, and examples
-- libcheck for testing
+- [OpenSSL](https://github.com/openssl/openssl) for testing, and examples
+- [libcheck](https://github.com/libcheck/check) for testing
 
 ### Build Instructions
 
