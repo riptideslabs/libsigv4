@@ -4,6 +4,7 @@ This project provides a C implementation of AWS Signature Version 4 (SigV4) sign
 
 ## Features
 - AWS SigV4 signing for HTTP requests
+- No dynamic memory allocations
 - Pluggable cryptographic backend integration (not limited to OpenSSL)
 - Simple API for integration into C projects
 - Example usage and tests included
