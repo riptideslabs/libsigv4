@@ -70,3 +70,7 @@ See `LICENSE` for details.
 
 ## Contributing
 Pull requests and issues are welcome!
+
+## Acknowledgments
+
+Special thanks to Shi Bai, who created the original version of this library: https://github.com/sidbai/aws-sigv4-c
