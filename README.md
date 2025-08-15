@@ -1,5 +1,7 @@
 # AWS SigV4 C Library
 
+[![Build](https://github.com/riptideslabs/libsigv4/actions/workflows/build.yml/badge.svg)](https://github.com/riptideslabs/libsigv4/actions/workflows/build.yml)
+
 This project provides a C implementation of AWS Signature Version 4 (SigV4) signing, suitable for use in embedded, kernel, or user-space applications. It includes a shared library and an example application demonstrating usage.
 
 ## Features
