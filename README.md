@@ -4,6 +4,24 @@
 
 This project provides a C implementation of AWS Signature Version 4 (SigV4) signing, suitable for use in embedded, kernel, or user-space applications. It includes a shared library and an example application demonstrating usage.
 
+## Related Blog Posts
+
+* **[Introducing libsigv4: AWS SigV4 Signatures in Portable C with Kernel Compatibility](https://blog.riptides.io/introducing-libsigv4-aws-sigv4-signatures-in-portable-c-with-kernel-compatibility/)**
+
+## Table of Contents
+* [Features](#features)
+* [Building](#building)
+    * [Prerequisites](#prerequisites)
+    * [Build Instructions](#build-instructions)
+    * [Clean Build Artifacts](#clean-build-artifacts)
+* [Usage](#usage)
+    * [System Header Configurability](#system-header-configurability)
+    * [Linking](#linking)
+    * [Example](#example)
+* [License](#license)
+* [Contributing](#contributing)
+* [Acknowledgments](#acknowledgments)
+
 ## Features
 - AWS SigV4 signing for HTTP requests
 - No dynamic memory allocations
