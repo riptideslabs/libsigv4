@@ -19,7 +19,7 @@
 #define AWS_SIGV4_BUFFER_OVERFLOW_ERROR -2
 #define AWS_SIGV4_INVALID_INPUT_ERROR -1
 #define AWS_SIGV4_OK 0
-#define AWS_SIGV4_MAX_NUM_HEADERS 10
+#define AWS_SIGV4_MAX_NUM_HEADERS 24
 #define AWS_SIGV4_AUTH_HEADER_MAX_LEN 2048
 
 typedef struct aws_sigv4_str_s
@@ -118,33 +118,42 @@ void get_signing_key(aws_sigv4_params_t *sigv4_params,
  *
  * @param[in] sigv4_params      Pointer to a struct of sigv4 parameters
  * @param[out] credential_scope Struct of buffer to store credential scope string
+ * @param[in] last              End of the writable output buffer (exclusive)
  */
 void get_credential_scope(aws_sigv4_params_t *sigv4_params,
-                          aws_sigv4_str_t *credential_scope);
+                          aws_sigv4_str_t *credential_scope,
+                          unsigned char *last);
 
 /** @brief get signed headers string
  *
  * @param[in] sigv4_params    Pointer to a struct of sigv4 parameters
  * @param[out] signed_headers Struct of buffer to store signed headers string
+ * @param[in] last            End of the writable output buffer (exclusive)
  */
 void get_signed_headers(aws_sigv4_params_t *sigv4_params,
-                        aws_sigv4_str_t *signed_headers);
+                        aws_sigv4_str_t *signed_headers,
+                        unsigned char *last);
 
 /** @brief get canonical headers string
  *
  * @param[in] sigv4_params        Pointer to a struct of sigv4 parameters
  * @param[out] canonical_headers  Struct of buffer to store canonical headers string
+ * @param[in] last                End of the writable output buffer (exclusive)
  */
 void get_canonical_headers(aws_sigv4_params_t *sigv4_params,
-                           aws_sigv4_str_t *canonical_headers);
+                           aws_sigv4_str_t *canonical_headers,
+                           unsigned char *last);
 
 /** @brief get canonical request string
  *
  * @param[in] sigv4_params        Pointer to a struct of sigv4 parameters
  * @param[out] canonical_request  Struct of buffer to store canonical request string
+ * @param[in] last                End of the writable output buffer (exclusive)
+ * @return Status code where zero for success and non-zero for failure
  */
 int get_canonical_request(aws_sigv4_params_t *sigv4_params,
-                          aws_sigv4_str_t *canonical_request);
+                          aws_sigv4_str_t *canonical_request,
+                          unsigned char *last);
 
 /** @brief get string to sign
  *
@@ -153,12 +162,15 @@ int get_canonical_request(aws_sigv4_params_t *sigv4_params,
  * @param[in] credential_scope  Pointer to a struct of precomputed credential scope
  * @param[in] canonical_request Pointer to a struct of precomputed canonical request
  * @param[out] string_to_sign   Struct of buffer to store string to sign
+ * @param[in] last              End of the writable output buffer (exclusive)
+ * @return Status code where zero for success and non-zero for failure
  */
-void get_string_to_sign(aws_sigv4_params_t *sigv4_params,
-                        aws_sigv4_str_t *request_date,
-                        aws_sigv4_str_t *credential_scope,
-                        aws_sigv4_str_t *canonical_request,
-                        aws_sigv4_str_t *string_to_sign);
+int get_string_to_sign(aws_sigv4_params_t *sigv4_params,
+                       aws_sigv4_str_t *request_date,
+                       aws_sigv4_str_t *credential_scope,
+                       aws_sigv4_str_t *canonical_request,
+                       aws_sigv4_str_t *string_to_sign,
+                       unsigned char *last);
 
 /** @brief perform sigv4 signing
  *
