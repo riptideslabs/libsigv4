@@ -52,6 +52,141 @@ START_TEST(AwsSigv4Test_AwsSigv4Sign)
 }
 END_TEST
 
+/* every additional header must end up in both the canonical and the signed headers,
+   otherwise S3 rejects the request with "There were headers present in the request
+   which were not signed" (e.g. x-amz-copy-source on CopyObject) */
+START_TEST(AwsSigv4Test_AdditionalHeadersAreSigned)
+{
+  aws_sigv4_params_t sigv4_params = {
+      .access_key_id = aws_sigv4_string((unsigned char *)"AKIDEXAMPLE"),
+      .secret_access_key = aws_sigv4_string((unsigned char *)"wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"),
+      .method = aws_sigv4_string((unsigned char *)"PUT"),
+      .uri = aws_sigv4_string((unsigned char *)"/Logo_dark2.png"),
+      .host = aws_sigv4_string((unsigned char *)"riptides-logos.s3.eu-central-1.amazonaws.com"),
+      .region = aws_sigv4_string((unsigned char *)"eu-central-1"),
+      .service = aws_sigv4_string((unsigned char *)"s3"),
+      .x_amz_date = aws_sigv4_string((unsigned char *)"20260803T120000Z"),
+      .headers = {
+          {
+              .key = aws_sigv4_string((unsigned char *)"x-amz-copy-source"),
+              .value = aws_sigv4_string((unsigned char *)"/riptides-logos/Logo_dark.png"),
+          },
+          {
+              .key = aws_sigv4_string((unsigned char *)"x-amz-content-sha256"),
+              .value = aws_sigv4_string((unsigned char *)"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+          },
+      },
+      .num_headers = 2,
+      .hmac_sha256 = HMAC_SHA256,
+      .sha256 = (void *)SHA256,
+      .sort = qsort,
+  };
+
+  char auth_buf[AWS_SIGV4_AUTH_HEADER_MAX_LEN] = {0};
+  aws_sigv4_header_t auth_header = {
+      .value = aws_sigv4_string((unsigned char *)auth_buf)};
+
+  int rc = aws_sigv4_sign(&sigv4_params, &auth_header);
+  const unsigned char *expected_auth_header_value =
+      "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20260803/eu-central-1/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-copy-source;x-amz-date, Signature=bd8e0ec929d2846e7ea9be3ac601e143bf6f02a23c476f0bd54d9c5a114eac1a";
+  ck_assert_int_eq(rc, AWS_SIGV4_OK);
+  ck_assert_pstr_eq(auth_header.value.data, expected_auth_header_value);
+}
+END_TEST
+
+/* on a common prefix the shorter header name sorts first, so SSE-KMS requests keep
+   x-amz-server-side-encryption ahead of x-amz-server-side-encryption-aws-kms-key-id */
+START_TEST(AwsSigv4Test_PrefixHeaderNamesAreOrdered)
+{
+  aws_sigv4_params_t sigv4_params = {
+      .access_key_id = aws_sigv4_string((unsigned char *)"AKIDEXAMPLE"),
+      .secret_access_key = aws_sigv4_string((unsigned char *)"wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"),
+      .method = aws_sigv4_string((unsigned char *)"PUT"),
+      .uri = aws_sigv4_string((unsigned char *)"/obj.txt"),
+      .host = aws_sigv4_string((unsigned char *)"riptides-logos.s3.eu-central-1.amazonaws.com"),
+      .region = aws_sigv4_string((unsigned char *)"eu-central-1"),
+      .service = aws_sigv4_string((unsigned char *)"s3"),
+      .x_amz_date = aws_sigv4_string((unsigned char *)"20260803T120000Z"),
+      .payload = aws_sigv4_string((unsigned char *)"abc"),
+      .unsigned_payload = true,
+      .headers = {
+          {
+              .key = aws_sigv4_string((unsigned char *)"x-amz-server-side-encryption"),
+              .value = aws_sigv4_string((unsigned char *)"aws:kms"),
+          },
+          {
+              .key = aws_sigv4_string((unsigned char *)"x-amz-server-side-encryption-aws-kms-key-id"),
+              .value = aws_sigv4_string((unsigned char *)"arn:aws:kms:eu-central-1:1:key/abc"),
+          },
+          {
+              .key = aws_sigv4_string((unsigned char *)"x-amz-content-sha256"),
+              .value = aws_sigv4_string((unsigned char *)"UNSIGNED-PAYLOAD"),
+          },
+          {
+              .key = aws_sigv4_string((unsigned char *)"content-length"),
+              .value = aws_sigv4_string((unsigned char *)"3"),
+          },
+      },
+      .num_headers = 4,
+      .hmac_sha256 = HMAC_SHA256,
+      .sha256 = (void *)SHA256,
+      .sort = qsort,
+  };
+
+  char auth_buf[AWS_SIGV4_AUTH_HEADER_MAX_LEN] = {0};
+  aws_sigv4_header_t auth_header = {
+      .value = aws_sigv4_string((unsigned char *)auth_buf)};
+
+  int rc = aws_sigv4_sign(&sigv4_params, &auth_header);
+  const unsigned char *expected_auth_header_value =
+      "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20260803/eu-central-1/s3/aws4_request, SignedHeaders=content-length;host;x-amz-content-sha256;x-amz-date;x-amz-server-side-encryption;x-amz-server-side-encryption-aws-kms-key-id, Signature=030bc849566322f211383dcab0b9dab63c6e29eca34786d6b303f601cb734f0c";
+  ck_assert_int_eq(rc, AWS_SIGV4_OK);
+  ck_assert_pstr_eq(auth_header.value.data, expected_auth_header_value);
+}
+END_TEST
+
+/* headers that do not fit into the internal buffers must fail the signing instead of
+   writing past them */
+START_TEST(AwsSigv4Test_TooLargeCanonicalRequestFails)
+{
+  static char keys[AWS_SIGV4_MAX_NUM_HEADERS][64];
+  static char values[AWS_SIGV4_MAX_NUM_HEADERS][1024];
+
+  aws_sigv4_params_t sigv4_params = {
+      .access_key_id = aws_sigv4_string((unsigned char *)"AKIDEXAMPLE"),
+      .secret_access_key = aws_sigv4_string((unsigned char *)"wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"),
+      .method = aws_sigv4_string((unsigned char *)"PUT"),
+      .uri = aws_sigv4_string((unsigned char *)"/obj.txt"),
+      .host = aws_sigv4_string((unsigned char *)"riptides-logos.s3.eu-central-1.amazonaws.com"),
+      .region = aws_sigv4_string((unsigned char *)"eu-central-1"),
+      .service = aws_sigv4_string((unsigned char *)"s3"),
+      .x_amz_date = aws_sigv4_string((unsigned char *)"20260803T120000Z"),
+      .unsigned_payload = true,
+      .hmac_sha256 = HMAC_SHA256,
+      .sha256 = (void *)SHA256,
+      .sort = qsort,
+  };
+
+  unsigned int i;
+  for (i = 0; i < AWS_SIGV4_MAX_NUM_HEADERS; i++)
+  {
+    snprintf(keys[i], sizeof(keys[i]), "x-amz-meta-header-number-%02u", i);
+    memset(values[i], 'v', sizeof(values[i]) - 1);
+    values[i][sizeof(values[i]) - 1] = '\0';
+    sigv4_params.headers[i].key = aws_sigv4_string((unsigned char *)keys[i]);
+    sigv4_params.headers[i].value = aws_sigv4_string((unsigned char *)values[i]);
+    sigv4_params.num_headers++;
+  }
+
+  char auth_buf[AWS_SIGV4_AUTH_HEADER_MAX_LEN] = {0};
+  aws_sigv4_header_t auth_header = {
+      .value = aws_sigv4_string((unsigned char *)auth_buf)};
+
+  int rc = aws_sigv4_sign(&sigv4_params, &auth_header);
+  ck_assert_int_eq(rc, AWS_SIGV4_BUFFER_OVERFLOW_ERROR);
+}
+END_TEST
+
 Suite *aws_sigv4_test_suite(void)
 {
   Suite *s;
@@ -59,6 +194,9 @@ Suite *aws_sigv4_test_suite(void)
 
   TCase *tc_aws_sigv4_sign = tcase_create("AwsSigv4Test_AwsSigv4Sign");
   tcase_add_test(tc_aws_sigv4_sign, AwsSigv4Test_AwsSigv4Sign);
+  tcase_add_test(tc_aws_sigv4_sign, AwsSigv4Test_AdditionalHeadersAreSigned);
+  tcase_add_test(tc_aws_sigv4_sign, AwsSigv4Test_PrefixHeaderNamesAreOrdered);
+  tcase_add_test(tc_aws_sigv4_sign, AwsSigv4Test_TooLargeCanonicalRequestFails);
   suite_add_tcase(s, tc_aws_sigv4_sign);
   return s;
 }
