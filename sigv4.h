@@ -21,6 +21,11 @@
 #define AWS_SIGV4_OK 0
 #define AWS_SIGV4_MAX_NUM_HEADERS 24
 #define AWS_SIGV4_AUTH_HEADER_MAX_LEN 2048
+#define AWS_SIGV4_CANONICAL_REQUEST_BUF_LEN 4096 // large enough for large session tokens
+#define AWS_SIGV4_STRING_TO_SIGN_BUF_LEN 1024
+#define AWS_SIGV4_MAX_NUM_QUERY_COMPONENTS 50
+/* host, x-amz-date and x-amz-content-sha256 are appended to the caller's headers */
+#define AWS_SIGV4_MAX_NUM_CANONICAL_HEADERS (AWS_SIGV4_MAX_NUM_HEADERS + 3)
 
 typedef struct aws_sigv4_str_s
 {
@@ -33,6 +38,20 @@ typedef struct aws_sigv4_kv_s
   aws_sigv4_str_t key;
   aws_sigv4_str_t value;
 } aws_sigv4_kv_t;
+
+/* Working buffers used while signing. This is ~8 KB, which does not fit on the
+   stack of every caller -- a Linux kernel task stack is 16 KB in total -- so the
+   caller owns the storage and passes it in via aws_sigv4_params_t.scratch. The
+   library itself never allocates. Its contents are meaningless to the caller and
+   need no initialisation; aws_sigv4_sign() only reads what it has written. */
+typedef struct aws_sigv4_scratch_s
+{
+  unsigned char canonical_request[AWS_SIGV4_CANONICAL_REQUEST_BUF_LEN];
+  unsigned char string_to_sign[AWS_SIGV4_STRING_TO_SIGN_BUF_LEN];
+  aws_sigv4_kv_t query_params[AWS_SIGV4_MAX_NUM_QUERY_COMPONENTS];
+  aws_sigv4_kv_t canonical_headers[AWS_SIGV4_MAX_NUM_CANONICAL_HEADERS];
+  aws_sigv4_str_t signed_headers[AWS_SIGV4_MAX_NUM_CANONICAL_HEADERS];
+} aws_sigv4_scratch_t;
 
 aws_sigv4_str_t aws_sigv4_string(const unsigned char *cstr);
 
@@ -85,6 +104,11 @@ typedef struct aws_sigv4_params_s
   int (*hmac_sha256)(const unsigned char *data, size_t data_len,
                      const unsigned char *key, size_t key_len,
                      unsigned char *out, size_t *out_len);
+
+  /* Caller-owned working buffers, see aws_sigv4_scratch_t. Must be non-NULL;
+     aws_sigv4_sign() rejects the request with AWS_SIGV4_INVALID_INPUT_ERROR
+     otherwise. */
+  aws_sigv4_scratch_t *scratch;
 
 } aws_sigv4_params_t;
 
