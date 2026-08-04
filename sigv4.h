@@ -148,36 +148,10 @@ void get_credential_scope(aws_sigv4_params_t *sigv4_params,
                           aws_sigv4_str_t *credential_scope,
                           unsigned char *last);
 
-/** @brief get signed headers string
- *
- * @param[in] sigv4_params    Pointer to a struct of sigv4 parameters
- * @param[out] signed_headers Struct of buffer to store signed headers string
- * @param[in] last            End of the writable output buffer (exclusive)
- */
-void get_signed_headers(aws_sigv4_params_t *sigv4_params,
-                        aws_sigv4_str_t *signed_headers,
-                        unsigned char *last);
-
-/** @brief get canonical headers string
- *
- * @param[in] sigv4_params        Pointer to a struct of sigv4 parameters
- * @param[out] canonical_headers  Struct of buffer to store canonical headers string
- * @param[in] last                End of the writable output buffer (exclusive)
- */
-void get_canonical_headers(aws_sigv4_params_t *sigv4_params,
-                           aws_sigv4_str_t *canonical_headers,
-                           unsigned char *last);
-
-/** @brief get canonical request string
- *
- * @param[in] sigv4_params        Pointer to a struct of sigv4 parameters
- * @param[out] canonical_request  Struct of buffer to store canonical request string
- * @param[in] last                End of the writable output buffer (exclusive)
- * @return Status code where zero for success and non-zero for failure
- */
-int get_canonical_request(aws_sigv4_params_t *sigv4_params,
-                          aws_sigv4_str_t *canonical_request,
-                          unsigned char *last);
+/* get_signed_headers(), get_canonical_headers() and get_canonical_request() build
+   their intermediate results in aws_sigv4_params_t.scratch and are only meaningful
+   part-way through a signing pass, so they are internal to sigv4.c rather than
+   exported. Call aws_sigv4_sign(), which owns the sequencing and validates scratch. */
 
 /** @brief get string to sign
  *

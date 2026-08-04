@@ -261,7 +261,7 @@ void get_credential_scope(aws_sigv4_params_t *sigv4_params,
   credential_scope->len = str - credential_scope->data;
 }
 
-void get_signed_headers(aws_sigv4_params_t *sigv4_params,
+static void get_signed_headers(aws_sigv4_params_t *sigv4_params,
                         aws_sigv4_str_t *signed_headers,
                         unsigned char *last)
 {
@@ -306,7 +306,7 @@ void get_signed_headers(aws_sigv4_params_t *sigv4_params,
   signed_headers->len = str - signed_headers->data;
 }
 
-void get_canonical_headers(aws_sigv4_params_t *sigv4_params,
+static void get_canonical_headers(aws_sigv4_params_t *sigv4_params,
                            aws_sigv4_str_t *canonical_headers,
                            unsigned char *last)
 {
@@ -362,7 +362,7 @@ void get_canonical_headers(aws_sigv4_params_t *sigv4_params,
   canonical_headers->len = str - canonical_headers->data;
 }
 
-int get_canonical_request(aws_sigv4_params_t *sigv4_params,
+static int get_canonical_request(aws_sigv4_params_t *sigv4_params,
                           aws_sigv4_str_t *canonical_request,
                           unsigned char *last)
 {
