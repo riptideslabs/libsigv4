@@ -4,13 +4,8 @@
 #define AWS_SIGV4_SIGNING_ALGORITHM "AWS4-HMAC-SHA256"
 #define SHA256_DIGEST_SIZE 32
 #define AWS_SIGV4_HEX_SHA256_LENGTH SHA256_DIGEST_SIZE * 2
-#define AWS_SIGV4_CANONICAL_REQUEST_BUF_LEN 4096 // Increased for large session tokens
-#define AWS_SIGV4_STRING_TO_SIGN_BUF_LEN 1024
 #define AWS_SIGV4_KEY_BUF_LEN 64
-#define AWS_SIGV4_MAX_NUM_QUERY_COMPONENTS 50
 #define HMAC_MAX_MD_CBLOCK 128
-/* host, x-amz-date and x-amz-content-sha256 are appended to the caller's headers */
-#define AWS_SIGV4_MAX_NUM_CANONICAL_HEADERS (AWS_SIGV4_MAX_NUM_HEADERS + 3)
 
 /* writable space left in an output buffer ending at last (exclusive) */
 static unsigned int space_left(unsigned char *str, unsigned char *last)
@@ -148,18 +143,23 @@ static unsigned char *construct_query_str(unsigned char *dst_cstr,
   return dst_cstr;
 }
 
-static void parse_query_params(aws_sigv4_str_t *query_str,
-                               aws_sigv4_kv_t *query_params,
-                               size_t *arr_len)
+/* parses at most AWS_SIGV4_MAX_NUM_QUERY_COMPONENTS components into query_params and
+   returns the number parsed; a longer query string is rejected by the caller rather
+   than silently signed without its trailing components */
+static int parse_query_params(aws_sigv4_str_t *query_str,
+                              aws_sigv4_kv_t *query_params,
+                              size_t *arr_len)
 {
+  *arr_len = 0;
   if (aws_sigv4_empty_str(query_str) || query_params == NULL)
   {
-    arr_len = 0;
-    return;
+    return AWS_SIGV4_OK;
   }
   size_t idx = 0;
   unsigned char *c_ptr = query_str->data;
-  query_params[0].key.data = c_ptr;
+  /* a component without '=' never reaches the assignments below, so start every one
+     of them empty rather than reading whatever the scratch buffer happened to hold */
+  query_params[0] = (aws_sigv4_kv_t){.key = {.data = c_ptr}};
   /* here we assume query string are well-formed */
   while (c_ptr != query_str->data + query_str->len)
   {
@@ -170,16 +170,27 @@ static void parse_query_params(aws_sigv4_str_t *query_str,
     }
     else if (*c_ptr == '&')
     {
-      query_params[idx].value.len = c_ptr - query_params[idx].value.data;
-      query_params[++idx].key.data = ++c_ptr;
+      if (idx + 1 >= AWS_SIGV4_MAX_NUM_QUERY_COMPONENTS)
+      {
+        return AWS_SIGV4_BUFFER_OVERFLOW_ERROR;
+      }
+      if (query_params[idx].value.data != NULL)
+      {
+        query_params[idx].value.len = c_ptr - query_params[idx].value.data;
+      }
+      query_params[++idx] = (aws_sigv4_kv_t){.key = {.data = ++c_ptr}};
     }
     else
     {
       c_ptr++;
     }
   }
-  query_params[idx].value.len = c_ptr - query_params[idx].value.data;
+  if (query_params[idx].value.data != NULL)
+  {
+    query_params[idx].value.len = c_ptr - query_params[idx].value.data;
+  }
   *arr_len = idx + 1;
+  return AWS_SIGV4_OK;
 }
 
 void get_hexdigest(aws_sigv4_str_t *str_in, aws_sigv4_str_t *hex_out)
@@ -250,11 +261,11 @@ void get_credential_scope(aws_sigv4_params_t *sigv4_params,
   credential_scope->len = str - credential_scope->data;
 }
 
-void get_signed_headers(aws_sigv4_params_t *sigv4_params,
+static void get_signed_headers(aws_sigv4_params_t *sigv4_params,
                         aws_sigv4_str_t *signed_headers,
                         unsigned char *last)
 {
-  aws_sigv4_str_t headers[AWS_SIGV4_MAX_NUM_CANONICAL_HEADERS];
+  aws_sigv4_str_t *headers = sigv4_params->scratch->signed_headers;
   unsigned num_headers = 0;
   bool has_amz_content_sha256_header = false;
 
@@ -295,11 +306,11 @@ void get_signed_headers(aws_sigv4_params_t *sigv4_params,
   signed_headers->len = str - signed_headers->data;
 }
 
-void get_canonical_headers(aws_sigv4_params_t *sigv4_params,
+static void get_canonical_headers(aws_sigv4_params_t *sigv4_params,
                            aws_sigv4_str_t *canonical_headers,
                            unsigned char *last)
 {
-  aws_sigv4_kv_t headers[AWS_SIGV4_MAX_NUM_CANONICAL_HEADERS];
+  aws_sigv4_kv_t *headers = sigv4_params->scratch->canonical_headers;
   unsigned num_headers = 0;
   aws_sigv4_kv_t *amz_content_sha256_header = NULL;
 
@@ -351,7 +362,7 @@ void get_canonical_headers(aws_sigv4_params_t *sigv4_params,
   canonical_headers->len = str - canonical_headers->data;
 }
 
-int get_canonical_request(aws_sigv4_params_t *sigv4_params,
+static int get_canonical_request(aws_sigv4_params_t *sigv4_params,
                           aws_sigv4_str_t *canonical_request,
                           unsigned char *last)
 {
@@ -366,9 +377,13 @@ int get_canonical_request(aws_sigv4_params_t *sigv4_params,
   /* query string can be empty */
   if (!aws_sigv4_empty_str(&sigv4_params->query_str))
   {
-    aws_sigv4_kv_t query_params[AWS_SIGV4_MAX_NUM_QUERY_COMPONENTS];
+    aws_sigv4_kv_t *query_params = sigv4_params->scratch->query_params;
     size_t query_num = 0;
-    parse_query_params(&sigv4_params->query_str, query_params, &query_num);
+    int rc = parse_query_params(&sigv4_params->query_str, query_params, &query_num);
+    if (rc != AWS_SIGV4_OK)
+    {
+      return rc;
+    }
     sigv4_params->sort(query_params, query_num, sizeof(aws_sigv4_kv_t),
                        (aws_sigv4_compare_func_t)aws_sigv4_kv_cmp);
     str = construct_query_str(str, last, query_params, query_num);
@@ -450,7 +465,7 @@ int get_string_to_sign(aws_sigv4_params_t *sigv4_params,
 int aws_sigv4_sign(aws_sigv4_params_t *sigv4_params, aws_sigv4_header_t *auth_header)
 {
   int rc = AWS_SIGV4_OK;
-  if (auth_header == NULL || sigv4_params == NULL || aws_sigv4_empty_str(&sigv4_params->secret_access_key) || aws_sigv4_empty_str(&sigv4_params->access_key_id) || aws_sigv4_empty_str(&sigv4_params->method) || aws_sigv4_empty_str(&sigv4_params->uri) || aws_sigv4_empty_str(&sigv4_params->host) || aws_sigv4_empty_str(&sigv4_params->x_amz_date) || aws_sigv4_empty_str(&sigv4_params->region) || aws_sigv4_empty_str(&sigv4_params->service) || sigv4_params->sort == NULL || sigv4_params->sha256 == NULL || sigv4_params->hmac_sha256 == NULL)
+  if (auth_header == NULL || sigv4_params == NULL || aws_sigv4_empty_str(&sigv4_params->secret_access_key) || aws_sigv4_empty_str(&sigv4_params->access_key_id) || aws_sigv4_empty_str(&sigv4_params->method) || aws_sigv4_empty_str(&sigv4_params->uri) || aws_sigv4_empty_str(&sigv4_params->host) || aws_sigv4_empty_str(&sigv4_params->x_amz_date) || aws_sigv4_empty_str(&sigv4_params->region) || aws_sigv4_empty_str(&sigv4_params->service) || sigv4_params->sort == NULL || sigv4_params->sha256 == NULL || sigv4_params->hmac_sha256 == NULL || sigv4_params->scratch == NULL)
   {
     rc = AWS_SIGV4_INVALID_INPUT_ERROR;
     goto err;
@@ -500,7 +515,8 @@ int aws_sigv4_sign(aws_sigv4_params_t *sigv4_params, aws_sigv4_header_t *auth_he
     goto err;
   }
   /* Task 1: Create a canonical request */
-  unsigned char canonical_request_buf[AWS_SIGV4_CANONICAL_REQUEST_BUF_LEN] = {0};
+  unsigned char *canonical_request_buf = sigv4_params->scratch->canonical_request;
+  memset(canonical_request_buf, 0, AWS_SIGV4_CANONICAL_REQUEST_BUF_LEN);
   aws_sigv4_str_t canonical_request = {.data = canonical_request_buf};
   rc = get_canonical_request(sigv4_params, &canonical_request,
                              canonical_request_buf + AWS_SIGV4_CANONICAL_REQUEST_BUF_LEN - 1);
@@ -509,7 +525,8 @@ int aws_sigv4_sign(aws_sigv4_params_t *sigv4_params, aws_sigv4_header_t *auth_he
     goto err;
   }
   /* Task 2: Create a string to sign */
-  unsigned char string_to_sign_buf[AWS_SIGV4_STRING_TO_SIGN_BUF_LEN] = {0};
+  unsigned char *string_to_sign_buf = sigv4_params->scratch->string_to_sign;
+  memset(string_to_sign_buf, 0, AWS_SIGV4_STRING_TO_SIGN_BUF_LEN);
   aws_sigv4_str_t string_to_sign = {.data = string_to_sign_buf};
   rc = get_string_to_sign(sigv4_params, &sigv4_params->x_amz_date, &credential_scope,
                           &canonical_request, &string_to_sign,

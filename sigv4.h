@@ -21,6 +21,11 @@
 #define AWS_SIGV4_OK 0
 #define AWS_SIGV4_MAX_NUM_HEADERS 24
 #define AWS_SIGV4_AUTH_HEADER_MAX_LEN 2048
+#define AWS_SIGV4_CANONICAL_REQUEST_BUF_LEN 4096 // large enough for large session tokens
+#define AWS_SIGV4_STRING_TO_SIGN_BUF_LEN 1024
+#define AWS_SIGV4_MAX_NUM_QUERY_COMPONENTS 50
+/* host, x-amz-date and x-amz-content-sha256 are appended to the caller's headers */
+#define AWS_SIGV4_MAX_NUM_CANONICAL_HEADERS (AWS_SIGV4_MAX_NUM_HEADERS + 3)
 
 typedef struct aws_sigv4_str_s
 {
@@ -33,6 +38,20 @@ typedef struct aws_sigv4_kv_s
   aws_sigv4_str_t key;
   aws_sigv4_str_t value;
 } aws_sigv4_kv_t;
+
+/* Working buffers used while signing. This is ~8 KB, which does not fit on the
+   stack of every caller -- a Linux kernel task stack is 16 KB in total -- so the
+   caller owns the storage and passes it in via aws_sigv4_params_t.scratch. The
+   library itself never allocates. Its contents are meaningless to the caller and
+   need no initialisation; aws_sigv4_sign() only reads what it has written. */
+typedef struct aws_sigv4_scratch_s
+{
+  unsigned char canonical_request[AWS_SIGV4_CANONICAL_REQUEST_BUF_LEN];
+  unsigned char string_to_sign[AWS_SIGV4_STRING_TO_SIGN_BUF_LEN];
+  aws_sigv4_kv_t query_params[AWS_SIGV4_MAX_NUM_QUERY_COMPONENTS];
+  aws_sigv4_kv_t canonical_headers[AWS_SIGV4_MAX_NUM_CANONICAL_HEADERS];
+  aws_sigv4_str_t signed_headers[AWS_SIGV4_MAX_NUM_CANONICAL_HEADERS];
+} aws_sigv4_scratch_t;
 
 aws_sigv4_str_t aws_sigv4_string(const unsigned char *cstr);
 
@@ -86,6 +105,11 @@ typedef struct aws_sigv4_params_s
                      const unsigned char *key, size_t key_len,
                      unsigned char *out, size_t *out_len);
 
+  /* Caller-owned working buffers, see aws_sigv4_scratch_t. Must be non-NULL;
+     aws_sigv4_sign() rejects the request with AWS_SIGV4_INVALID_INPUT_ERROR
+     otherwise. */
+  aws_sigv4_scratch_t *scratch;
+
 } aws_sigv4_params_t;
 
 /** @brief get hex encoding of a given string
@@ -124,36 +148,10 @@ void get_credential_scope(aws_sigv4_params_t *sigv4_params,
                           aws_sigv4_str_t *credential_scope,
                           unsigned char *last);
 
-/** @brief get signed headers string
- *
- * @param[in] sigv4_params    Pointer to a struct of sigv4 parameters
- * @param[out] signed_headers Struct of buffer to store signed headers string
- * @param[in] last            End of the writable output buffer (exclusive)
- */
-void get_signed_headers(aws_sigv4_params_t *sigv4_params,
-                        aws_sigv4_str_t *signed_headers,
-                        unsigned char *last);
-
-/** @brief get canonical headers string
- *
- * @param[in] sigv4_params        Pointer to a struct of sigv4 parameters
- * @param[out] canonical_headers  Struct of buffer to store canonical headers string
- * @param[in] last                End of the writable output buffer (exclusive)
- */
-void get_canonical_headers(aws_sigv4_params_t *sigv4_params,
-                           aws_sigv4_str_t *canonical_headers,
-                           unsigned char *last);
-
-/** @brief get canonical request string
- *
- * @param[in] sigv4_params        Pointer to a struct of sigv4 parameters
- * @param[out] canonical_request  Struct of buffer to store canonical request string
- * @param[in] last                End of the writable output buffer (exclusive)
- * @return Status code where zero for success and non-zero for failure
- */
-int get_canonical_request(aws_sigv4_params_t *sigv4_params,
-                          aws_sigv4_str_t *canonical_request,
-                          unsigned char *last);
+/* get_signed_headers(), get_canonical_headers() and get_canonical_request() build
+   their intermediate results in aws_sigv4_params_t.scratch and are only meaningful
+   part-way through a signing pass, so they are internal to sigv4.c rather than
+   exported. Call aws_sigv4_sign(), which owns the sequencing and validates scratch. */
 
 /** @brief get string to sign
  *

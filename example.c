@@ -4,6 +4,10 @@
 
 #include "sigv4.h"
 
+/* the signer works out of caller-owned buffers; ~8 KB, so keep it out of
+   automatic storage -- on a kernel stack it would not fit at all */
+static aws_sigv4_scratch_t scratch;
+
 int HMAC_SHA256(const unsigned char *data, size_t data_len,
                 const unsigned char *key, size_t key_len,
                 unsigned char *out, size_t *out_len)
@@ -29,6 +33,7 @@ int main()
         .hmac_sha256 = HMAC_SHA256,
         .sha256 = (void *)SHA256,
         .sort = qsort,
+        .scratch = &scratch,
     };
 
     char auth_buf[AWS_SIGV4_AUTH_HEADER_MAX_LEN] = {0};

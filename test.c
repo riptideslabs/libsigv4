@@ -4,6 +4,10 @@
 
 #include "sigv4.h"
 
+/* the signer works out of caller-owned buffers; ~8 KB, so keep it out of
+   automatic storage -- on a kernel stack it would not fit at all */
+static aws_sigv4_scratch_t scratch;
+
 int HMAC_SHA256(const unsigned char *data, size_t data_len,
                 const unsigned char *key, size_t key_len,
                 unsigned char *out, size_t *out_len)
@@ -29,6 +33,7 @@ START_TEST(AwsSigv4Test_AwsSigv4Sign)
       .hmac_sha256 = HMAC_SHA256,
       .sha256 = (void *)SHA256,
       .sort = qsort,
+      .scratch = &scratch,
   };
 
   char auth_buf[AWS_SIGV4_AUTH_HEADER_MAX_LEN] = {0};
@@ -80,6 +85,7 @@ START_TEST(AwsSigv4Test_AdditionalHeadersAreSigned)
       .hmac_sha256 = HMAC_SHA256,
       .sha256 = (void *)SHA256,
       .sort = qsort,
+      .scratch = &scratch,
   };
 
   char auth_buf[AWS_SIGV4_AUTH_HEADER_MAX_LEN] = {0};
@@ -131,6 +137,7 @@ START_TEST(AwsSigv4Test_PrefixHeaderNamesAreOrdered)
       .hmac_sha256 = HMAC_SHA256,
       .sha256 = (void *)SHA256,
       .sort = qsort,
+      .scratch = &scratch,
   };
 
   char auth_buf[AWS_SIGV4_AUTH_HEADER_MAX_LEN] = {0};
@@ -165,6 +172,7 @@ START_TEST(AwsSigv4Test_TooLargeCanonicalRequestFails)
       .hmac_sha256 = HMAC_SHA256,
       .sha256 = (void *)SHA256,
       .sort = qsort,
+      .scratch = &scratch,
   };
 
   unsigned int i;
@@ -187,6 +195,73 @@ START_TEST(AwsSigv4Test_TooLargeCanonicalRequestFails)
 }
 END_TEST
 
+/* the scratch buffers are mandatory: without them the signer has nowhere to build the
+   canonical request, so it must refuse rather than dereference NULL */
+START_TEST(AwsSigv4Test_MissingScratchIsRejected)
+{
+  aws_sigv4_params_t sigv4_params = {
+      .access_key_id = aws_sigv4_string((unsigned char *)"AKIDEXAMPLE"),
+      .secret_access_key = aws_sigv4_string((unsigned char *)"wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"),
+      .method = aws_sigv4_string((unsigned char *)"GET"),
+      .uri = aws_sigv4_string((unsigned char *)"/"),
+      .host = aws_sigv4_string((unsigned char *)"riptides-logos.s3.eu-central-1.amazonaws.com"),
+      .region = aws_sigv4_string((unsigned char *)"eu-central-1"),
+      .service = aws_sigv4_string((unsigned char *)"s3"),
+      .x_amz_date = aws_sigv4_string((unsigned char *)"20260803T120000Z"),
+      .hmac_sha256 = HMAC_SHA256,
+      .sha256 = (void *)SHA256,
+      .sort = qsort,
+      .scratch = NULL,
+  };
+
+  char auth_buf[AWS_SIGV4_AUTH_HEADER_MAX_LEN] = {0};
+  aws_sigv4_header_t auth_header = {
+      .value = aws_sigv4_string((unsigned char *)auth_buf)};
+
+  int rc = aws_sigv4_sign(&sigv4_params, &auth_header);
+  ck_assert_int_eq(rc, AWS_SIGV4_INVALID_INPUT_ERROR);
+}
+END_TEST
+
+/* a query string with more components than the parser can hold must fail the signing:
+   silently dropping the tail would write past the scratch array and produce a
+   canonical request that does not match what the request actually carries */
+START_TEST(AwsSigv4Test_TooManyQueryParamsFails)
+{
+  static char query[8 * 1024];
+  char *w = query;
+  int i;
+  for (i = 0; i < AWS_SIGV4_MAX_NUM_QUERY_COMPONENTS + 5; i++)
+  {
+    w += snprintf(w, sizeof(query) - (w - query), "%sk%02d=v%02d", i ? "&" : "", i, i);
+  }
+
+  aws_sigv4_params_t sigv4_params = {
+      .access_key_id = aws_sigv4_string((unsigned char *)"AKIDEXAMPLE"),
+      .secret_access_key = aws_sigv4_string((unsigned char *)"wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"),
+      .method = aws_sigv4_string((unsigned char *)"GET"),
+      .uri = aws_sigv4_string((unsigned char *)"/"),
+      .query_str = aws_sigv4_string((unsigned char *)query),
+      .host = aws_sigv4_string((unsigned char *)"riptides-logos.s3.eu-central-1.amazonaws.com"),
+      .region = aws_sigv4_string((unsigned char *)"eu-central-1"),
+      .service = aws_sigv4_string((unsigned char *)"s3"),
+      .x_amz_date = aws_sigv4_string((unsigned char *)"20260803T120000Z"),
+      .unsigned_payload = true,
+      .hmac_sha256 = HMAC_SHA256,
+      .sha256 = (void *)SHA256,
+      .sort = qsort,
+      .scratch = &scratch,
+  };
+
+  char auth_buf[AWS_SIGV4_AUTH_HEADER_MAX_LEN] = {0};
+  aws_sigv4_header_t auth_header = {
+      .value = aws_sigv4_string((unsigned char *)auth_buf)};
+
+  int rc = aws_sigv4_sign(&sigv4_params, &auth_header);
+  ck_assert_int_eq(rc, AWS_SIGV4_BUFFER_OVERFLOW_ERROR);
+}
+END_TEST
+
 Suite *aws_sigv4_test_suite(void)
 {
   Suite *s;
@@ -197,6 +272,8 @@ Suite *aws_sigv4_test_suite(void)
   tcase_add_test(tc_aws_sigv4_sign, AwsSigv4Test_AdditionalHeadersAreSigned);
   tcase_add_test(tc_aws_sigv4_sign, AwsSigv4Test_PrefixHeaderNamesAreOrdered);
   tcase_add_test(tc_aws_sigv4_sign, AwsSigv4Test_TooLargeCanonicalRequestFails);
+  tcase_add_test(tc_aws_sigv4_sign, AwsSigv4Test_MissingScratchIsRejected);
+  tcase_add_test(tc_aws_sigv4_sign, AwsSigv4Test_TooManyQueryParamsFails);
   suite_add_tcase(s, tc_aws_sigv4_sign);
   return s;
 }
