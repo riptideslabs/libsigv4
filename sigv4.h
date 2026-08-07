@@ -13,6 +13,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
+#include <strings.h> /* strncasecmp; not pulled in by string.h under -std=c99 */
 #include <ctype.h>
 #endif
 
