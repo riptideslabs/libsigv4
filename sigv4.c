@@ -55,7 +55,7 @@ static unsigned char *aws_sigv4_vslprintf(unsigned char *buf, unsigned char *las
           goto finished;
         }
         size_t cp_len = n_max >= str->len ? str->len : n_max;
-        strncpy((char *)c_ptr, (char *)str->data, cp_len);
+        memcpy((char *)c_ptr, (char *)str->data, cp_len);
         c_ptr += cp_len;
         fmt += 2;
       }
