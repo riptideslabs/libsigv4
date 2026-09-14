@@ -274,7 +274,7 @@ static void get_signed_headers(aws_sigv4_params_t *sigv4_params,
   for (i = 0; i < sigv4_params->num_headers && num_headers < AWS_SIGV4_MAX_NUM_HEADERS; i++)
   {
     // check if the header is x-amz-content-sha256
-    if (strncasecmp(sigv4_params->headers[i].key.data, "x-amz-content-sha256", sigv4_params->headers[i].key.len) == 0)
+    if (strncasecmp((char *)sigv4_params->headers[i].key.data, "x-amz-content-sha256", sigv4_params->headers[i].key.len) == 0)
     {
       has_amz_content_sha256_header = true;
     }
@@ -323,7 +323,7 @@ static void get_canonical_headers(aws_sigv4_params_t *sigv4_params,
   for (i = 0; i < sigv4_params->num_headers && num_headers < AWS_SIGV4_MAX_NUM_HEADERS; i++)
   {
     // check if the header is x-amz-content-sha256
-    if (strncasecmp(sigv4_params->headers[i].key.data, "x-amz-content-sha256", sigv4_params->headers[i].key.len) == 0)
+    if (strncasecmp((char *)sigv4_params->headers[i].key.data, "x-amz-content-sha256", sigv4_params->headers[i].key.len) == 0)
     {
       amz_content_sha256_header = &sigv4_params->headers[i];
     }
