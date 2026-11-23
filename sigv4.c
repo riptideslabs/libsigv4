@@ -215,14 +215,29 @@ void get_hex_sha256(aws_sigv4_params_t *sigv4_params, aws_sigv4_str_t *str_in, a
   get_hexdigest(&sha256_str, hex_sha256_out);
 }
 
-void get_signing_key(aws_sigv4_params_t *sigv4_params, aws_sigv4_str_t *signing_key)
+int get_signing_key(aws_sigv4_params_t *sigv4_params, aws_sigv4_str_t *signing_key)
 {
   unsigned char key_buf[AWS_SIGV4_KEY_BUF_LEN] = {0};
   unsigned char msg_buf[AWS_SIGV4_KEY_BUF_LEN] = {0};
+  /* leave room for the terminating NUL the printf helpers write at last */
+  unsigned char *key_last = key_buf + AWS_SIGV4_KEY_BUF_LEN - 1;
+  unsigned char *msg_last = msg_buf + AWS_SIGV4_KEY_BUF_LEN - 1;
   aws_sigv4_str_t key = {.data = key_buf};
   aws_sigv4_str_t msg = {.data = msg_buf};
+
+  /* region and service often come from a request's Host, so their length is
+     the caller's input: refuse rather than truncate, which would sign with a
+     different key */
+  if (sigv4_params->secret_access_key.len > space_left(key_buf, key_last) - 4 ||
+      sigv4_params->region.len > space_left(msg_buf, msg_last) ||
+      sigv4_params->service.len > space_left(msg_buf, msg_last))
+  {
+    return AWS_SIGV4_BUFFER_OVERFLOW_ERROR;
+  }
+
   /* kDate = HMAC("AWS4" + kSecret, Date) */
-  key.len = aws_sigv4_sprintf(key_buf, "AWS4%V", &sigv4_params->secret_access_key) - key_buf;
+  key.len = aws_sigv4_snprintf(key_buf, space_left(key_buf, key_last), "AWS4%V",
+                               &sigv4_params->secret_access_key) - key_buf;
   /* data in YYYYMMDD format */
   msg.len = aws_sigv4_snprintf(msg_buf, 8, "%V", &sigv4_params->x_amz_date) - msg_buf;
   /* get HMAC SHA256 */
@@ -231,21 +246,25 @@ void get_signing_key(aws_sigv4_params_t *sigv4_params, aws_sigv4_str_t *signing_
   /* kRegion = HMAC(kDate, Region) */
   memcpy(key_buf, signing_key->data, signing_key->len);
   key.len = signing_key->len;
-  msg.len = aws_sigv4_sprintf(msg_buf, "%V", &sigv4_params->region) - msg_buf;
+  msg.len = aws_sigv4_snprintf(msg_buf, space_left(msg_buf, msg_last), "%V",
+                               &sigv4_params->region) - msg_buf;
   sigv4_params->hmac_sha256(msg.data, msg.len, key.data, key.len,
                             signing_key->data, (size_t *)&signing_key->len);
   /* kService = HMAC(kRegion, Service) */
   memcpy(key_buf, signing_key->data, signing_key->len);
   key.len = signing_key->len;
-  msg.len = aws_sigv4_sprintf(msg_buf, "%V", &sigv4_params->service) - msg_buf;
+  msg.len = aws_sigv4_snprintf(msg_buf, space_left(msg_buf, msg_last), "%V",
+                               &sigv4_params->service) - msg_buf;
   sigv4_params->hmac_sha256(msg.data, msg.len, key.data, key.len,
                             signing_key->data, (size_t *)&signing_key->len);
   /* kSigning = HMAC(kService, "aws4_request") */
   memcpy(key_buf, signing_key->data, signing_key->len);
   key.len = signing_key->len;
-  msg.len = aws_sigv4_sprintf(msg_buf, "aws4_request") - msg_buf;
+  msg.len = aws_sigv4_snprintf(msg_buf, space_left(msg_buf, msg_last), "aws4_request") - msg_buf;
   sigv4_params->hmac_sha256(msg.data, msg.len, key.data, key.len,
                             signing_key->data, (size_t *)&signing_key->len);
+
+  return AWS_SIGV4_OK;
 }
 
 void get_credential_scope(aws_sigv4_params_t *sigv4_params,
@@ -539,7 +558,11 @@ int aws_sigv4_sign(aws_sigv4_params_t *sigv4_params, aws_sigv4_header_t *auth_he
   /* 3.1: Derive signing key */
   unsigned char signing_key_buf[AWS_SIGV4_KEY_BUF_LEN] = {0};
   aws_sigv4_str_t signing_key = {.data = signing_key_buf};
-  get_signing_key(sigv4_params, &signing_key);
+  rc = get_signing_key(sigv4_params, &signing_key);
+  if (rc != AWS_SIGV4_OK)
+  {
+    goto err;
+  }
   /* 3.2: Calculate signature on the string to sign */
   unsigned char signed_msg_buf[HMAC_MAX_MD_CBLOCK] = {0};
   aws_sigv4_str_t signed_msg = {.data = signed_msg_buf};
