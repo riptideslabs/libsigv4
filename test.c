@@ -195,6 +195,55 @@ START_TEST(AwsSigv4Test_TooLargeCanonicalRequestFails)
 }
 END_TEST
 
+/* region, service and "AWS4" + secret each go through a 64-byte buffer when the
+   signing key is derived; one byte too long must fail instead of writing past it */
+START_TEST(AwsSigv4Test_TooLongSigningKeyPartsFail)
+{
+  static char long_part[65];
+  static char fits_part[64];
+  memset(long_part, 'a', sizeof(long_part) - 1);
+  memset(fits_part, 'a', sizeof(fits_part) - 1);
+
+  aws_sigv4_params_t base = {
+      .access_key_id = aws_sigv4_string((unsigned char *)"AKIDEXAMPLE"),
+      .secret_access_key = aws_sigv4_string((unsigned char *)"wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"),
+      .method = aws_sigv4_string((unsigned char *)"GET"),
+      .uri = aws_sigv4_string((unsigned char *)"/"),
+      .host = aws_sigv4_string((unsigned char *)"riptides-logos.s3.eu-central-1.amazonaws.com"),
+      .region = aws_sigv4_string((unsigned char *)"eu-central-1"),
+      .service = aws_sigv4_string((unsigned char *)"s3"),
+      .x_amz_date = aws_sigv4_string((unsigned char *)"20260803T120000Z"),
+      .unsigned_payload = true,
+      .hmac_sha256 = HMAC_SHA256,
+      .sha256 = (void *)SHA256,
+      .sort = qsort,
+      .scratch = &scratch,
+  };
+  aws_sigv4_params_t sigv4_params;
+  char auth_buf[AWS_SIGV4_AUTH_HEADER_MAX_LEN];
+  aws_sigv4_header_t auth_header;
+
+#define SIGN_WITH(field, val, expected_rc)                                        \
+  do                                                                              \
+  {                                                                               \
+    sigv4_params = base;                                                          \
+    sigv4_params.field = aws_sigv4_string((unsigned char *)(val));                \
+    memset(auth_buf, 0, sizeof(auth_buf));                                        \
+    auth_header = (aws_sigv4_header_t){.value = {.data = (unsigned char *)auth_buf}}; \
+    ck_assert_int_eq(aws_sigv4_sign(&sigv4_params, &auth_header), (expected_rc)); \
+  } while (0)
+
+  SIGN_WITH(region, fits_part, AWS_SIGV4_OK);
+  SIGN_WITH(region, long_part, AWS_SIGV4_BUFFER_OVERFLOW_ERROR);
+  SIGN_WITH(service, fits_part, AWS_SIGV4_OK);
+  SIGN_WITH(service, long_part, AWS_SIGV4_BUFFER_OVERFLOW_ERROR);
+  SIGN_WITH(secret_access_key, fits_part + 4, AWS_SIGV4_OK);
+  SIGN_WITH(secret_access_key, long_part + 4, AWS_SIGV4_BUFFER_OVERFLOW_ERROR);
+
+#undef SIGN_WITH
+}
+END_TEST
+
 /* the scratch buffers are mandatory: without them the signer has nowhere to build the
    canonical request, so it must refuse rather than dereference NULL */
 START_TEST(AwsSigv4Test_MissingScratchIsRejected)
@@ -272,6 +321,7 @@ Suite *aws_sigv4_test_suite(void)
   tcase_add_test(tc_aws_sigv4_sign, AwsSigv4Test_AdditionalHeadersAreSigned);
   tcase_add_test(tc_aws_sigv4_sign, AwsSigv4Test_PrefixHeaderNamesAreOrdered);
   tcase_add_test(tc_aws_sigv4_sign, AwsSigv4Test_TooLargeCanonicalRequestFails);
+  tcase_add_test(tc_aws_sigv4_sign, AwsSigv4Test_TooLongSigningKeyPartsFail);
   tcase_add_test(tc_aws_sigv4_sign, AwsSigv4Test_MissingScratchIsRejected);
   tcase_add_test(tc_aws_sigv4_sign, AwsSigv4Test_TooManyQueryParamsFails);
   suite_add_tcase(s, tc_aws_sigv4_sign);

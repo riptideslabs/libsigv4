@@ -135,9 +135,11 @@ void get_hex_sha256(aws_sigv4_params_t *sigv4_params,
  *
  * @param[in] sigv4_params  Pointer to a struct of sigv4 parameters
  * @param[out] signing_key  Struct of buffer to store derived signing key
+ * @return AWS_SIGV4_OK, or AWS_SIGV4_BUFFER_OVERFLOW_ERROR when the secret
+ *         (plus "AWS4"), the region or the service does not fit in 63 bytes
  */
-void get_signing_key(aws_sigv4_params_t *sigv4_params,
-                     aws_sigv4_str_t *signing_key);
+int get_signing_key(aws_sigv4_params_t *sigv4_params,
+                    aws_sigv4_str_t *signing_key);
 
 /** @brief get credential scope string
  *
