@@ -458,6 +458,25 @@ START_TEST(AwsSigv4Test_ExportedBuildersStayBeforeLast)
 }
 END_TEST
 
+/* only a header named exactly x-amz-content-sha256 replaces the one added for S3;
+   a name that is merely a prefix of it must not */
+START_TEST(AwsSigv4Test_ContentSha256PrefixIsNotTheHeader)
+{
+  aws_sigv4_params_t sigv4_params = valid_params;
+  sigv4_params.headers[0].key = aws_sigv4_string((unsigned char *)"x-amz-content");
+  sigv4_params.headers[0].value = aws_sigv4_string((unsigned char *)"v");
+  sigv4_params.num_headers = 1;
+
+  char auth_buf[AWS_SIGV4_AUTH_HEADER_MAX_LEN] = {0};
+  aws_sigv4_header_t auth_header = {
+      .value = aws_sigv4_string((unsigned char *)auth_buf)};
+
+  ck_assert_int_eq(aws_sigv4_sign(&sigv4_params, &auth_header), AWS_SIGV4_OK);
+  ck_assert_ptr_nonnull(strstr(auth_buf, "SignedHeaders=host;x-amz-content;x-amz-content-sha256;x-amz-date,"));
+  ck_assert_ptr_nonnull(strstr((char *)scratch.canonical_request, "x-amz-content-sha256:UNSIGNED-PAYLOAD\n"));
+}
+END_TEST
+
 Suite *aws_sigv4_test_suite(void)
 {
   Suite *s;
@@ -475,6 +494,7 @@ Suite *aws_sigv4_test_suite(void)
   tcase_add_test(tc_aws_sigv4_sign, AwsSigv4Test_BadHmacRejected);
   tcase_add_test(tc_aws_sigv4_sign, AwsSigv4Test_SnprintfStaysWithinN);
   tcase_add_test(tc_aws_sigv4_sign, AwsSigv4Test_ExportedBuildersStayBeforeLast);
+  tcase_add_test(tc_aws_sigv4_sign, AwsSigv4Test_ContentSha256PrefixIsNotTheHeader);
   suite_add_tcase(s, tc_aws_sigv4_sign);
   return s;
 }
