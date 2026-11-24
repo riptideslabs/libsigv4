@@ -311,6 +311,153 @@ START_TEST(AwsSigv4Test_TooManyQueryParamsFails)
 }
 END_TEST
 
+static const aws_sigv4_params_t valid_params = {
+    .access_key_id = {(unsigned char *)"AKIDEXAMPLE", 11},
+    .secret_access_key = {(unsigned char *)"wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY", 40},
+    .method = {(unsigned char *)"GET", 3},
+    .uri = {(unsigned char *)"/", 1},
+    .host = {(unsigned char *)"riptides-logos.s3.eu-central-1.amazonaws.com", 44},
+    .region = {(unsigned char *)"eu-central-1", 12},
+    .service = {(unsigned char *)"s3", 2},
+    .x_amz_date = {(unsigned char *)"20260803T120000Z", 16},
+    .unsigned_payload = true,
+    .hmac_sha256 = HMAC_SHA256,
+    .sha256 = (void *)SHA256,
+    .sort = qsort,
+    .scratch = &scratch,
+};
+
+/* num_headers is the caller's to set; a count beyond the headers array must be
+   refused instead of walking past it */
+START_TEST(AwsSigv4Test_TooManyHeadersRejected)
+{
+  aws_sigv4_params_t sigv4_params = valid_params;
+  unsigned int i;
+  for (i = 0; i < AWS_SIGV4_MAX_NUM_HEADERS; i++)
+  {
+    sigv4_params.headers[i].key = aws_sigv4_string((unsigned char *)"x-amz-meta-a");
+    sigv4_params.headers[i].value = aws_sigv4_string((unsigned char *)"v");
+  }
+  sigv4_params.num_headers = AWS_SIGV4_MAX_NUM_HEADERS + 1;
+
+  char auth_buf[AWS_SIGV4_AUTH_HEADER_MAX_LEN] = {0};
+  aws_sigv4_header_t auth_header = {
+      .value = aws_sigv4_string((unsigned char *)auth_buf)};
+
+  ck_assert_int_eq(aws_sigv4_sign(&sigv4_params, &auth_header), AWS_SIGV4_INVALID_INPUT_ERROR);
+}
+END_TEST
+
+static int HMAC_SHA256_Failing(const unsigned char *data, size_t data_len,
+                               const unsigned char *key, size_t key_len,
+                               unsigned char *out, size_t *out_len)
+{
+  (void)data, (void)data_len, (void)key, (void)key_len, (void)out;
+  *out_len = 0;
+  return -1;
+}
+
+/* a wrong digest, e.g. SHA-512 plugged in by mistake: 64 bytes, not 32 */
+static int HMAC_SHA512(const unsigned char *data, size_t data_len,
+                       const unsigned char *key, size_t key_len,
+                       unsigned char *out, size_t *out_len)
+{
+  unsigned int len = 0;
+  unsigned char *ac = HMAC(EVP_sha512(), key, key_len, data, data_len, out, &len);
+  *out_len = len;
+  return (ac != NULL) ? 0 : -1;
+}
+
+/* the HMAC callback's result and reported length decide how much is copied into the
+   signer's fixed buffers, so a failing or wrong-sized HMAC must fail the signing */
+START_TEST(AwsSigv4Test_BadHmacRejected)
+{
+  aws_sigv4_params_t sigv4_params;
+  char auth_buf[AWS_SIGV4_AUTH_HEADER_MAX_LEN] = {0};
+  aws_sigv4_header_t auth_header;
+
+  sigv4_params = valid_params;
+  sigv4_params.hmac_sha256 = HMAC_SHA256_Failing;
+  auth_header = (aws_sigv4_header_t){.value = {.data = (unsigned char *)auth_buf}};
+  ck_assert_int_eq(aws_sigv4_sign(&sigv4_params, &auth_header), AWS_SIGV4_INVALID_INPUT_ERROR);
+
+  sigv4_params = valid_params;
+  sigv4_params.hmac_sha256 = HMAC_SHA512;
+  auth_header = (aws_sigv4_header_t){.value = {.data = (unsigned char *)auth_buf}};
+  ck_assert_int_eq(aws_sigv4_sign(&sigv4_params, &auth_header), AWS_SIGV4_INVALID_INPUT_ERROR);
+}
+END_TEST
+
+/* like snprintf: n bounds everything written, terminator included */
+START_TEST(AwsSigv4Test_SnprintfStaysWithinN)
+{
+  unsigned char buf[8];
+  unsigned char *end;
+
+  memset(buf, 'x', sizeof(buf));
+  end = aws_sigv4_snprintf(buf, 4, "abcdef");
+  ck_assert_ptr_eq(end, buf + 3);
+  ck_assert_mem_eq(buf, "abc\0x", 5);
+
+  memset(buf, 'x', sizeof(buf));
+  end = aws_sigv4_snprintf(buf, 0, "abcdef");
+  ck_assert_ptr_eq(end, buf);
+  ck_assert_int_eq(buf[0], 'x');
+
+  memset(buf, 'x', sizeof(buf));
+  end = aws_sigv4_snprintf(buf, sizeof(buf), "abc");
+  ck_assert_ptr_eq(end, buf + 3);
+  ck_assert_mem_eq(buf, "abc\0x", 5);
+}
+END_TEST
+
+/* get_credential_scope() and get_string_to_sign() take last as the exclusive end of
+   the output buffer, so nothing may be written there */
+START_TEST(AwsSigv4Test_ExportedBuildersStayBeforeLast)
+{
+  aws_sigv4_params_t sigv4_params = valid_params;
+  static const char scope[] = "20260803/eu-central-1/s3/aws4_request";
+  unsigned char buf[256];
+  aws_sigv4_str_t out;
+
+  /* room for the text and its terminator: nothing is lost */
+  memset(buf, 'x', sizeof(buf));
+  out = (aws_sigv4_str_t){.data = buf};
+  get_credential_scope(&sigv4_params, &out, buf + sizeof(scope));
+  ck_assert_uint_eq(out.len, sizeof(scope) - 1);
+  ck_assert_mem_eq(buf, scope, sizeof(scope));
+  ck_assert_int_eq(buf[sizeof(scope)], 'x');
+
+  /* shorter than the yyyymmdd date */
+  memset(buf, 'x', sizeof(buf));
+  out = (aws_sigv4_str_t){.data = buf};
+  get_credential_scope(&sigv4_params, &out, buf + 5);
+  ck_assert_uint_lt(out.len, 5);
+  ck_assert_int_eq(buf[5], 'x');
+
+  aws_sigv4_str_t date = sigv4_params.x_amz_date;
+  aws_sigv4_str_t credential_scope = {(unsigned char *)scope, sizeof(scope) - 1};
+  aws_sigv4_str_t canonical_request = aws_sigv4_string((unsigned char *)"GET\n/\n");
+  /* "AWS4-HMAC-SHA256\n" date "\n" scope "\n" hex(sha256) */
+  size_t sts_len = 17 + date.len + 1 + credential_scope.len + 1 + 64;
+
+  memset(buf, 'x', sizeof(buf));
+  out = (aws_sigv4_str_t){.data = buf};
+  ck_assert_int_eq(get_string_to_sign(&sigv4_params, &date, &credential_scope,
+                                      &canonical_request, &out, buf + sts_len),
+                   AWS_SIGV4_OK);
+  ck_assert_uint_eq(out.len, sts_len);
+  ck_assert_int_eq(buf[sts_len], 'x');
+
+  memset(buf, 'x', sizeof(buf));
+  out = (aws_sigv4_str_t){.data = buf};
+  ck_assert_int_eq(get_string_to_sign(&sigv4_params, &date, &credential_scope,
+                                      &canonical_request, &out, buf + 20),
+                   AWS_SIGV4_BUFFER_OVERFLOW_ERROR);
+  ck_assert_int_eq(buf[20], 'x');
+}
+END_TEST
+
 Suite *aws_sigv4_test_suite(void)
 {
   Suite *s;
@@ -324,6 +471,10 @@ Suite *aws_sigv4_test_suite(void)
   tcase_add_test(tc_aws_sigv4_sign, AwsSigv4Test_TooLongSigningKeyPartsFail);
   tcase_add_test(tc_aws_sigv4_sign, AwsSigv4Test_MissingScratchIsRejected);
   tcase_add_test(tc_aws_sigv4_sign, AwsSigv4Test_TooManyQueryParamsFails);
+  tcase_add_test(tc_aws_sigv4_sign, AwsSigv4Test_TooManyHeadersRejected);
+  tcase_add_test(tc_aws_sigv4_sign, AwsSigv4Test_BadHmacRejected);
+  tcase_add_test(tc_aws_sigv4_sign, AwsSigv4Test_SnprintfStaysWithinN);
+  tcase_add_test(tc_aws_sigv4_sign, AwsSigv4Test_ExportedBuildersStayBeforeLast);
   suite_add_tcase(s, tc_aws_sigv4_sign);
   return s;
 }

@@ -62,6 +62,8 @@ int aws_sigv4_empty_str(aws_sigv4_str_t *str);
 
 unsigned char *aws_sigv4_sprintf(unsigned char *buf, const char *fmt, ...);
 
+/* Like snprintf, but %V (an aws_sigv4_str_t *) is the only conversion: writes at most
+   n bytes into buf, terminator included, and returns a pointer past the text. */
 unsigned char *aws_sigv4_snprintf(unsigned char *buf, unsigned int n, const char *fmt, ...);
 
 typedef aws_sigv4_kv_t aws_sigv4_header_t;
@@ -90,7 +92,8 @@ typedef struct aws_sigv4_params_s
   aws_sigv4_str_t service;
   aws_sigv4_str_t region;
 
-  /* Additional headers */
+  /* Additional headers; aws_sigv4_sign() rejects num_headers above
+     AWS_SIGV4_MAX_NUM_HEADERS with AWS_SIGV4_INVALID_INPUT_ERROR */
   aws_sigv4_kv_t headers[AWS_SIGV4_MAX_NUM_HEADERS];
   unsigned int num_headers;
 
@@ -101,7 +104,8 @@ typedef struct aws_sigv4_params_s
   /* SHA256 function */
   void (*sha256)(const unsigned char *data, unsigned int len, unsigned char *out);
 
-  /* HMAC SHA256 function */
+  /* HMAC SHA256 function. Returns 0 on success and sets *out_len to the 32-byte
+     digest size; anything else fails the signing with AWS_SIGV4_INVALID_INPUT_ERROR */
   int (*hmac_sha256)(const unsigned char *data, size_t data_len,
                      const unsigned char *key, size_t key_len,
                      unsigned char *out, size_t *out_len);
@@ -136,7 +140,8 @@ void get_hex_sha256(aws_sigv4_params_t *sigv4_params,
  * @param[in] sigv4_params  Pointer to a struct of sigv4 parameters
  * @param[out] signing_key  Struct of buffer to store derived signing key
  * @return AWS_SIGV4_OK, or AWS_SIGV4_BUFFER_OVERFLOW_ERROR when the secret
- *         (plus "AWS4"), the region or the service does not fit in 63 bytes
+ *         (plus "AWS4"), the region or the service does not fit in 63 bytes, or
+ *         AWS_SIGV4_INVALID_INPUT_ERROR when the hmac_sha256 callback fails
  */
 int get_signing_key(aws_sigv4_params_t *sigv4_params,
                     aws_sigv4_str_t *signing_key);
