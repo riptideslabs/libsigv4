@@ -56,6 +56,8 @@ typedef struct aws_sigv4_scratch_s
 
 aws_sigv4_str_t aws_sigv4_string(const unsigned char *cstr);
 
+/* Compares like strcmp; when one string is a prefix of the other, the shorter one
+   sorts first, so only strings of equal length compare equal. */
 int aws_sigv4_strcmp(aws_sigv4_str_t *str1, aws_sigv4_str_t *str2);
 
 int aws_sigv4_empty_str(aws_sigv4_str_t *str);
@@ -93,7 +95,9 @@ typedef struct aws_sigv4_params_s
   aws_sigv4_str_t region;
 
   /* Additional headers; aws_sigv4_sign() rejects num_headers above
-     AWS_SIGV4_MAX_NUM_HEADERS with AWS_SIGV4_INVALID_INPUT_ERROR */
+     AWS_SIGV4_MAX_NUM_HEADERS with AWS_SIGV4_INVALID_INPUT_ERROR. Names may use
+     any case: they are signed in lowercase and the caller's buffers are not
+     modified, so they may be read-only. */
   aws_sigv4_kv_t headers[AWS_SIGV4_MAX_NUM_HEADERS];
   unsigned int num_headers;
 

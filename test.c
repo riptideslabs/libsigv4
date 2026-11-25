@@ -559,6 +559,49 @@ START_TEST(AwsSigv4Test_NullHeaderDataRejected)
 }
 END_TEST
 
+/* mixed-case header names are signed as their lowercase form, without writing to the
+   caller's (possibly read-only) name buffers */
+START_TEST(AwsSigv4Test_HeaderNamesAreNotModified)
+{
+  unsigned char meta[] = "X-Amz-Meta-Foo";
+  unsigned char ctype[] = "Content-Type";
+  aws_sigv4_params_t sigv4_params = valid_params;
+  sigv4_params.headers[0].key = aws_sigv4_string(meta);
+  sigv4_params.headers[0].value = aws_sigv4_string((unsigned char *)"v");
+  sigv4_params.headers[1].key = aws_sigv4_string(ctype);
+  sigv4_params.headers[1].value = aws_sigv4_string((unsigned char *)"text/plain");
+  sigv4_params.num_headers = 2;
+
+  char auth_buf[AWS_SIGV4_AUTH_HEADER_MAX_LEN] = {0};
+  aws_sigv4_header_t auth_header = {.value = {.data = (unsigned char *)auth_buf}};
+  ck_assert_int_eq(aws_sigv4_sign(&sigv4_params, &auth_header), AWS_SIGV4_OK);
+  ck_assert_str_eq((char *)meta, "X-Amz-Meta-Foo");
+  ck_assert_str_eq((char *)ctype, "Content-Type");
+  ck_assert_ptr_nonnull(strstr(auth_buf, "SignedHeaders=content-type;host;x-amz-content-sha256;x-amz-date;x-amz-meta-foo,"));
+  ck_assert_ptr_nonnull(strstr((char *)scratch.canonical_request, "\ncontent-type:text/plain\nhost:"));
+
+  char lower_buf[AWS_SIGV4_AUTH_HEADER_MAX_LEN] = {0};
+  aws_sigv4_header_t lower_header = {.value = {.data = (unsigned char *)lower_buf}};
+  sigv4_params.headers[0].key = aws_sigv4_string((unsigned char *)"x-amz-meta-foo");
+  sigv4_params.headers[1].key = aws_sigv4_string((unsigned char *)"content-type");
+  ck_assert_int_eq(aws_sigv4_sign(&sigv4_params, &lower_header), AWS_SIGV4_OK);
+  ck_assert_str_eq(auth_buf, lower_buf);
+}
+END_TEST
+
+/* a string that is a prefix of another is not equal to it */
+START_TEST(AwsSigv4Test_StrcmpComparesLength)
+{
+  aws_sigv4_str_t ab = aws_sigv4_string((unsigned char *)"ab");
+  aws_sigv4_str_t abc = aws_sigv4_string((unsigned char *)"abc");
+  aws_sigv4_str_t ab2 = aws_sigv4_string((unsigned char *)"ab");
+
+  ck_assert_int_lt(aws_sigv4_strcmp(&ab, &abc), 0);
+  ck_assert_int_gt(aws_sigv4_strcmp(&abc, &ab), 0);
+  ck_assert_int_eq(aws_sigv4_strcmp(&ab, &ab2), 0);
+}
+END_TEST
+
 Suite *aws_sigv4_test_suite(void)
 {
   Suite *s;
@@ -581,6 +624,8 @@ Suite *aws_sigv4_test_suite(void)
   tcase_add_test(tc_aws_sigv4_sign, AwsSigv4Test_EmptyHeaderValueIsSigned);
   tcase_add_test(tc_aws_sigv4_sign, AwsSigv4Test_AuthValueIsTerminated);
   tcase_add_test(tc_aws_sigv4_sign, AwsSigv4Test_NullHeaderDataRejected);
+  tcase_add_test(tc_aws_sigv4_sign, AwsSigv4Test_HeaderNamesAreNotModified);
+  tcase_add_test(tc_aws_sigv4_sign, AwsSigv4Test_StrcmpComparesLength);
   suite_add_tcase(s, tc_aws_sigv4_sign);
   return s;
 }

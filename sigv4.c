@@ -32,7 +32,12 @@ aws_sigv4_str_t aws_sigv4_string(const unsigned char *cstr)
 int aws_sigv4_strcmp(aws_sigv4_str_t *str1, aws_sigv4_str_t *str2)
 {
   size_t len = str1->len <= str2->len ? str1->len : str2->len;
-  return strncmp((char *)str1->data, (char *)str2->data, len);
+  int rc = strncmp((char *)str1->data, (char *)str2->data, len);
+  if (rc != 0)
+  {
+    return rc;
+  }
+  return (str1->len < str2->len) ? -1 : (str1->len > str2->len) ? 1 : 0;
 }
 
 /* reference: http://lxr.nginx.org/source/src/core/ngx_string.c */
@@ -115,11 +120,14 @@ static bool is_s3(aws_sigv4_params_t *sigv4_params)
 }
 
 /* lexicographic order: on a common prefix the shorter name sorts first, so that
-   e.g. x-amz-meta sorts before x-amz-meta-foo as the canonical form requires */
-static int aws_sigv4_cmp(unsigned char *d1, size_t l1, unsigned char *d2, size_t l2)
+   e.g. x-amz-meta sorts before x-amz-meta-foo as the canonical form requires.
+   Header names are compared by their lowercase form, which is what gets signed. */
+static int aws_sigv4_cmp(unsigned char *d1, size_t l1, unsigned char *d2, size_t l2,
+                         bool ignore_case)
 {
   size_t len = l1 <= l2 ? l1 : l2;
-  int rc = strncmp((char *)d1, (char *)d2, len);
+  int rc = ignore_case ? strncasecmp((char *)d1, (char *)d2, len)
+                       : strncmp((char *)d1, (char *)d2, len);
   if (rc != 0)
   {
     return rc;
@@ -130,13 +138,28 @@ static int aws_sigv4_cmp(unsigned char *d1, size_t l1, unsigned char *d2, size_t
 static int aws_sigv4_kv_cmp(aws_sigv4_kv_t *p1,
                             aws_sigv4_kv_t *p2)
 {
-  return aws_sigv4_cmp(p1->key.data, p1->key.len, p2->key.data, p2->key.len);
+  return aws_sigv4_cmp(p1->key.data, p1->key.len, p2->key.data, p2->key.len, false);
 }
 
-static int aws_sigv4_str_cmp(aws_sigv4_str_t *p1,
-                             aws_sigv4_str_t *p2)
+static int aws_sigv4_header_kv_cmp(aws_sigv4_kv_t *p1,
+                                   aws_sigv4_kv_t *p2)
 {
-  return aws_sigv4_cmp(p1->data, p1->len, p2->data, p2->len);
+  return aws_sigv4_cmp(p1->key.data, p1->key.len, p2->key.data, p2->key.len, true);
+}
+
+static int aws_sigv4_header_name_cmp(aws_sigv4_str_t *p1,
+                                     aws_sigv4_str_t *p2)
+{
+  return aws_sigv4_cmp(p1->data, p1->len, p2->data, p2->len, true);
+}
+
+/* header names are lowercased in the output, never in the caller's buffers */
+static void lowercase(unsigned char *from, unsigned char *to)
+{
+  for (; from < to; from++)
+  {
+    *from = tolower(*from);
+  }
 }
 
 static unsigned char *construct_query_str(unsigned char *dst_cstr,
@@ -363,7 +386,7 @@ static void get_signed_headers(aws_sigv4_params_t *sigv4_params,
   }
 
   // sort additional headers
-  sigv4_params->sort(headers, num_headers, sizeof(aws_sigv4_str_t), (aws_sigv4_compare_func_t)aws_sigv4_str_cmp);
+  sigv4_params->sort(headers, num_headers, sizeof(aws_sigv4_str_t), (aws_sigv4_compare_func_t)aws_sigv4_header_name_cmp);
 
   // construct signed headers string
   unsigned char *str = signed_headers->data;
@@ -373,7 +396,9 @@ static void get_signed_headers(aws_sigv4_params_t *sigv4_params,
     {
       str = sigv4_snprintf_raw(str, space_left(str, last), ";");
     }
+    unsigned char *name = str;
     str = sigv4_snprintf_raw(str, space_left(str, last), "%V", &headers[i]);
+    lowercase(name, str);
   }
 
   signed_headers->len = str - signed_headers->data;
@@ -424,13 +449,16 @@ static void get_canonical_headers(aws_sigv4_params_t *sigv4_params,
   }
 
   // sort additional headers
-  sigv4_params->sort(headers, num_headers, sizeof(aws_sigv4_kv_t), (aws_sigv4_compare_func_t)aws_sigv4_kv_cmp);
+  sigv4_params->sort(headers, num_headers, sizeof(aws_sigv4_kv_t), (aws_sigv4_compare_func_t)aws_sigv4_header_kv_cmp);
 
   // construct canonical headers string
   unsigned char *str = canonical_headers->data;
   for (i = 0; i < num_headers; i++)
   {
-    str = sigv4_snprintf_raw(str, space_left(str, last), "%V:%V\n", &headers[i].key, &headers[i].value);
+    unsigned char *name = str;
+    str = sigv4_snprintf_raw(str, space_left(str, last), "%V", &headers[i].key);
+    lowercase(name, str);
+    str = sigv4_snprintf_raw(str, space_left(str, last), ":%V\n", &headers[i].value);
   }
 
   canonical_headers->len = str - canonical_headers->data;
@@ -558,19 +586,6 @@ int aws_sigv4_sign(aws_sigv4_params_t *sigv4_params, aws_sigv4_header_t *auth_he
     {
       rc = AWS_SIGV4_INVALID_INPUT_ERROR;
       goto err;
-    }
-  }
-
-  // Normalize additional header names to lowercase at the beginning
-  for (i = 0; i < sigv4_params->num_headers; i++)
-  {
-    size_t j;
-    for (j = 0; j < sigv4_params->headers[i].key.len; j++)
-    {
-      if (isupper(sigv4_params->headers[i].key.data[j]))
-      {
-        sigv4_params->headers[i].key.data[j] = tolower(sigv4_params->headers[i].key.data[j]);
-      }
     }
   }
 
