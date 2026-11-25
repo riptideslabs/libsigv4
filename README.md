@@ -84,6 +84,12 @@ Link against the shared library and your selected crypto backend:
 -L. -lsigv4 [crypto backend linkage]
 ```
 
+### Crypto Callbacks
+The caller supplies `sort`, `sha256` and `hmac_sha256` in `aws_sigv4_params_t`. The `hmac_sha256` callback must:
+- return `0` on success. OpenSSL's `HMAC_*` functions return `1` on success, so wrap them; any non-zero return fails the signing.
+- set `*out_len` to 32; any other length fails the signing.
+- write at most 64 bytes to `out`. The length is checked only after the call.
+
 ### Example
 See `example.c` for a usage demonstration.
 

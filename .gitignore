@@ -59,3 +59,6 @@ aws_sigv4/deps
 
 test
 example
+
+# C review output
+.c-review-results/
