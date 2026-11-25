@@ -521,6 +521,44 @@ START_TEST(AwsSigv4Test_EmptyHeaderValueIsSigned)
 }
 END_TEST
 
+/* a reused auth buffer must not leave stale bytes after the signature for
+   callers that read the value as a C string */
+START_TEST(AwsSigv4Test_AuthValueIsTerminated)
+{
+  aws_sigv4_params_t sigv4_params = valid_params;
+
+  char auth_buf[AWS_SIGV4_AUTH_HEADER_MAX_LEN];
+  memset(auth_buf, 'X', sizeof(auth_buf));
+  aws_sigv4_header_t auth_header = {.value = {.data = (unsigned char *)auth_buf}};
+
+  ck_assert_int_eq(aws_sigv4_sign(&sigv4_params, &auth_header), AWS_SIGV4_OK);
+  ck_assert_int_eq(auth_buf[auth_header.value.len], '\0');
+}
+END_TEST
+
+/* a header with a NULL buffer but a non-zero length must be refused, not dereferenced */
+START_TEST(AwsSigv4Test_NullHeaderDataRejected)
+{
+  aws_sigv4_params_t sigv4_params;
+  char auth_buf[AWS_SIGV4_AUTH_HEADER_MAX_LEN] = {0};
+  aws_sigv4_header_t auth_header;
+
+  sigv4_params = valid_params;
+  sigv4_params.headers[0].key = (aws_sigv4_str_t){.data = NULL, .len = 5};
+  sigv4_params.headers[0].value = aws_sigv4_string((unsigned char *)"v");
+  sigv4_params.num_headers = 1;
+  auth_header = (aws_sigv4_header_t){.value = {.data = (unsigned char *)auth_buf}};
+  ck_assert_int_eq(aws_sigv4_sign(&sigv4_params, &auth_header), AWS_SIGV4_INVALID_INPUT_ERROR);
+
+  sigv4_params = valid_params;
+  sigv4_params.headers[0].key = aws_sigv4_string((unsigned char *)"x-amz-meta-a");
+  sigv4_params.headers[0].value = (aws_sigv4_str_t){.data = NULL, .len = 5};
+  sigv4_params.num_headers = 1;
+  auth_header = (aws_sigv4_header_t){.value = {.data = (unsigned char *)auth_buf}};
+  ck_assert_int_eq(aws_sigv4_sign(&sigv4_params, &auth_header), AWS_SIGV4_INVALID_INPUT_ERROR);
+}
+END_TEST
+
 Suite *aws_sigv4_test_suite(void)
 {
   Suite *s;
@@ -541,6 +579,8 @@ Suite *aws_sigv4_test_suite(void)
   tcase_add_test(tc_aws_sigv4_sign, AwsSigv4Test_ContentSha256PrefixIsNotTheHeader);
   tcase_add_test(tc_aws_sigv4_sign, AwsSigv4Test_ValuelessQueryParamsAreSigned);
   tcase_add_test(tc_aws_sigv4_sign, AwsSigv4Test_EmptyHeaderValueIsSigned);
+  tcase_add_test(tc_aws_sigv4_sign, AwsSigv4Test_AuthValueIsTerminated);
+  tcase_add_test(tc_aws_sigv4_sign, AwsSigv4Test_NullHeaderDataRejected);
   suite_add_tcase(s, tc_aws_sigv4_sign);
   return s;
 }

@@ -240,8 +240,8 @@ void get_hex_sha256(aws_sigv4_params_t *sigv4_params, aws_sigv4_str_t *str_in, a
 
 /* the callback decides how many bytes land in out and are later copied into fixed
    buffers, so anything but a successful 32-byte digest is refused */
-static int hmac_sha256(aws_sigv4_params_t *sigv4_params, aws_sigv4_str_t *msg,
-                       aws_sigv4_str_t *key, aws_sigv4_str_t *out)
+static int sigv4_hmac_sha256(aws_sigv4_params_t *sigv4_params, aws_sigv4_str_t *msg,
+                             aws_sigv4_str_t *key, aws_sigv4_str_t *out)
 {
   size_t out_len = 0;
   if (sigv4_params->hmac_sha256(msg->data, msg->len, key->data, key->len,
@@ -279,7 +279,7 @@ int get_signing_key(aws_sigv4_params_t *sigv4_params, aws_sigv4_str_t *signing_k
                                &sigv4_params->secret_access_key) - key_buf;
   /* data in YYYYMMDD format */
   msg.len = sigv4_snprintf_raw(msg_buf, 8, "%V", &sigv4_params->x_amz_date) - msg_buf;
-  if (hmac_sha256(sigv4_params, &msg, &key, signing_key) != AWS_SIGV4_OK)
+  if (sigv4_hmac_sha256(sigv4_params, &msg, &key, signing_key) != AWS_SIGV4_OK)
   {
     return AWS_SIGV4_INVALID_INPUT_ERROR;
   }
@@ -288,7 +288,7 @@ int get_signing_key(aws_sigv4_params_t *sigv4_params, aws_sigv4_str_t *signing_k
   key.len = signing_key->len;
   msg.len = sigv4_snprintf_raw(msg_buf, space_left(msg_buf, msg_last), "%V",
                                &sigv4_params->region) - msg_buf;
-  if (hmac_sha256(sigv4_params, &msg, &key, signing_key) != AWS_SIGV4_OK)
+  if (sigv4_hmac_sha256(sigv4_params, &msg, &key, signing_key) != AWS_SIGV4_OK)
   {
     return AWS_SIGV4_INVALID_INPUT_ERROR;
   }
@@ -297,7 +297,7 @@ int get_signing_key(aws_sigv4_params_t *sigv4_params, aws_sigv4_str_t *signing_k
   key.len = signing_key->len;
   msg.len = sigv4_snprintf_raw(msg_buf, space_left(msg_buf, msg_last), "%V",
                                &sigv4_params->service) - msg_buf;
-  if (hmac_sha256(sigv4_params, &msg, &key, signing_key) != AWS_SIGV4_OK)
+  if (sigv4_hmac_sha256(sigv4_params, &msg, &key, signing_key) != AWS_SIGV4_OK)
   {
     return AWS_SIGV4_INVALID_INPUT_ERROR;
   }
@@ -305,7 +305,7 @@ int get_signing_key(aws_sigv4_params_t *sigv4_params, aws_sigv4_str_t *signing_k
   memcpy(key_buf, signing_key->data, signing_key->len);
   key.len = signing_key->len;
   msg.len = sigv4_snprintf_raw(msg_buf, space_left(msg_buf, msg_last), "aws4_request") - msg_buf;
-  if (hmac_sha256(sigv4_params, &msg, &key, signing_key) != AWS_SIGV4_OK)
+  if (sigv4_hmac_sha256(sigv4_params, &msg, &key, signing_key) != AWS_SIGV4_OK)
   {
     return AWS_SIGV4_INVALID_INPUT_ERROR;
   }
@@ -550,8 +550,18 @@ int aws_sigv4_sign(aws_sigv4_params_t *sigv4_params, aws_sigv4_header_t *auth_he
     goto err;
   }
 
-  // Normalize additional header names to lowercase at the beginning
   size_t i;
+  for (i = 0; i < sigv4_params->num_headers; i++)
+  {
+    aws_sigv4_header_t *h = &sigv4_params->headers[i];
+    if ((h->key.data == NULL && h->key.len > 0) || (h->value.data == NULL && h->value.len > 0))
+    {
+      rc = AWS_SIGV4_INVALID_INPUT_ERROR;
+      goto err;
+    }
+  }
+
+  // Normalize additional header names to lowercase at the beginning
   for (i = 0; i < sigv4_params->num_headers; i++)
   {
     size_t j;
@@ -626,7 +636,7 @@ int aws_sigv4_sign(aws_sigv4_params_t *sigv4_params, aws_sigv4_header_t *auth_he
   /* 3.2: Calculate signature on the string to sign */
   unsigned char signed_msg_buf[HMAC_MAX_MD_CBLOCK] = {0};
   aws_sigv4_str_t signed_msg = {.data = signed_msg_buf};
-  if (hmac_sha256(sigv4_params, &string_to_sign, &signing_key, &signed_msg) != AWS_SIGV4_OK)
+  if (sigv4_hmac_sha256(sigv4_params, &string_to_sign, &signing_key, &signed_msg) != AWS_SIGV4_OK)
   {
     rc = AWS_SIGV4_INVALID_INPUT_ERROR;
     goto err;
@@ -642,6 +652,8 @@ int aws_sigv4_sign(aws_sigv4_params_t *sigv4_params, aws_sigv4_header_t *auth_he
     rc = AWS_SIGV4_BUFFER_OVERFLOW_ERROR;
     goto err;
   }
+  /* auth_last reserves room for it; keeps a reused buffer usable as a C string */
+  *str = '\0';
 
 err:
   return rc;

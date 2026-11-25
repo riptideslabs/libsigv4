@@ -104,8 +104,10 @@ typedef struct aws_sigv4_params_s
   /* SHA256 function */
   void (*sha256)(const unsigned char *data, unsigned int len, unsigned char *out);
 
-  /* HMAC SHA256 function. Returns 0 on success and sets *out_len to the 32-byte
-     digest size; anything else fails the signing with AWS_SIGV4_INVALID_INPUT_ERROR */
+  /* HMAC SHA256 function. Returns 0 on success (not 1, as OpenSSL does) and sets
+     *out_len to the 32-byte digest size; anything else fails the signing with
+     AWS_SIGV4_INVALID_INPUT_ERROR. out has room for 64 bytes; the length is only
+     checked after the call, so writing more overflows it. */
   int (*hmac_sha256)(const unsigned char *data, size_t data_len,
                      const unsigned char *key, size_t key_len,
                      unsigned char *out, size_t *out_len);
@@ -138,7 +140,9 @@ void get_hex_sha256(aws_sigv4_params_t *sigv4_params,
 /** @brief derive signing key
  *
  * @param[in] sigv4_params  Pointer to a struct of sigv4 parameters
- * @param[out] signing_key  Struct of buffer to store derived signing key
+ * @param[out] signing_key  Struct of buffer to store derived signing key; the
+ *                          hmac_sha256 callback writes into it, so it must hold
+ *                          64 bytes
  * @return AWS_SIGV4_OK, or AWS_SIGV4_BUFFER_OVERFLOW_ERROR when the secret
  *         (plus "AWS4"), the region or the service does not fit in 63 bytes, or
  *         AWS_SIGV4_INVALID_INPUT_ERROR when the hmac_sha256 callback fails
@@ -181,8 +185,12 @@ int get_string_to_sign(aws_sigv4_params_t *sigv4_params,
 /** @brief perform sigv4 signing
  *
  * @param[in] sigv4_params  A pointer to a struct of sigv4 parameters
- * @param[out] auth_header  A struct to store Authorization header name and value
- * @return Status code where zero for success and non-zero for failure
+ * @param[out] auth_header  A struct to store Authorization header name and value;
+ *                          value.data must hold AWS_SIGV4_AUTH_HEADER_MAX_LEN
+ *                          bytes and is NUL-terminated on success
+ * @return Status code where zero for success and non-zero for failure;
+ *         AWS_SIGV4_INVALID_INPUT_ERROR also when a header's key or value has
+ *         a NULL data pointer with a non-zero length
  */
 int aws_sigv4_sign(aws_sigv4_params_t *sigv4_params, aws_sigv4_header_t *auth_header);
 
