@@ -408,6 +408,13 @@ START_TEST(AwsSigv4Test_SnprintfStaysWithinN)
   end = aws_sigv4_snprintf(buf, sizeof(buf), "abc");
   ck_assert_ptr_eq(end, buf + 3);
   ck_assert_mem_eq(buf, "abc\0x", 5);
+
+  /* an empty %V adds nothing; the rest of fmt and the terminator still follow */
+  aws_sigv4_str_t empty = {0};
+  memset(buf, 'x', sizeof(buf));
+  end = aws_sigv4_snprintf(buf, sizeof(buf), "a%Vbc", &empty);
+  ck_assert_ptr_eq(end, buf + 3);
+  ck_assert_mem_eq(buf, "abc\0x", 5);
 }
 END_TEST
 
@@ -477,6 +484,43 @@ START_TEST(AwsSigv4Test_ContentSha256PrefixIsNotTheHeader)
 }
 END_TEST
 
+/* S3 subresources such as ?versions, ?acl or ?uploads carry no '=' and are signed as
+   "key="; expected signature from botocore's S3SigV4Auth */
+START_TEST(AwsSigv4Test_ValuelessQueryParamsAreSigned)
+{
+  aws_sigv4_params_t sigv4_params = valid_params;
+  sigv4_params.query_str = aws_sigv4_string((unsigned char *)"versions&prefix=a&acl");
+
+  char auth_buf[AWS_SIGV4_AUTH_HEADER_MAX_LEN] = {0};
+  aws_sigv4_header_t auth_header = {
+      .value = aws_sigv4_string((unsigned char *)auth_buf)};
+
+  ck_assert_int_eq(aws_sigv4_sign(&sigv4_params, &auth_header), AWS_SIGV4_OK);
+  ck_assert_ptr_nonnull(strstr((char *)scratch.canonical_request, "\nacl=&prefix=a&versions=\n"));
+  ck_assert_pstr_eq(auth_buf, "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20260803/eu-central-1/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=5fcca9d3eff90f36048028aabc1e14c281bf88854dea446a542712dc8981965d");
+}
+END_TEST
+
+/* an empty header value is still a "name:\n" line; expected signature from botocore */
+START_TEST(AwsSigv4Test_EmptyHeaderValueIsSigned)
+{
+  aws_sigv4_params_t sigv4_params = valid_params;
+  sigv4_params.method = aws_sigv4_string((unsigned char *)"PUT");
+  sigv4_params.uri = aws_sigv4_string((unsigned char *)"/obj.txt");
+  sigv4_params.headers[0].key = aws_sigv4_string((unsigned char *)"x-amz-meta-empty");
+  sigv4_params.headers[0].value = aws_sigv4_string((unsigned char *)"");
+  sigv4_params.num_headers = 1;
+
+  char auth_buf[AWS_SIGV4_AUTH_HEADER_MAX_LEN] = {0};
+  aws_sigv4_header_t auth_header = {
+      .value = aws_sigv4_string((unsigned char *)auth_buf)};
+
+  ck_assert_int_eq(aws_sigv4_sign(&sigv4_params, &auth_header), AWS_SIGV4_OK);
+  ck_assert_ptr_nonnull(strstr((char *)scratch.canonical_request, "\nx-amz-meta-empty:\n\n"));
+  ck_assert_pstr_eq(auth_buf, "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20260803/eu-central-1/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-meta-empty, Signature=da67b15c172a1febe40bdabcb3e1b1cd4a0a797aa8280726895197a78263d96e");
+}
+END_TEST
+
 Suite *aws_sigv4_test_suite(void)
 {
   Suite *s;
@@ -495,6 +539,8 @@ Suite *aws_sigv4_test_suite(void)
   tcase_add_test(tc_aws_sigv4_sign, AwsSigv4Test_SnprintfStaysWithinN);
   tcase_add_test(tc_aws_sigv4_sign, AwsSigv4Test_ExportedBuildersStayBeforeLast);
   tcase_add_test(tc_aws_sigv4_sign, AwsSigv4Test_ContentSha256PrefixIsNotTheHeader);
+  tcase_add_test(tc_aws_sigv4_sign, AwsSigv4Test_ValuelessQueryParamsAreSigned);
+  tcase_add_test(tc_aws_sigv4_sign, AwsSigv4Test_EmptyHeaderValueIsSigned);
   suite_add_tcase(s, tc_aws_sigv4_sign);
   return s;
 }

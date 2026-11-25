@@ -50,13 +50,14 @@ static unsigned char *aws_sigv4_vslprintf(unsigned char *buf, unsigned char *las
       if (*(fmt + 1) == 'V')
       {
         str = va_arg(args, aws_sigv4_str_t *);
-        if (aws_sigv4_empty_str(str))
+        /* an empty argument adds nothing but the rest of fmt still applies, so an empty
+           header value keeps its "\n" and a valueless query key its "=" */
+        if (!aws_sigv4_empty_str(str))
         {
-          goto finished;
+          size_t cp_len = n_max >= str->len ? str->len : n_max;
+          memcpy((char *)c_ptr, (char *)str->data, cp_len);
+          c_ptr += cp_len;
         }
-        size_t cp_len = n_max >= str->len ? str->len : n_max;
-        memcpy((char *)c_ptr, (char *)str->data, cp_len);
-        c_ptr += cp_len;
         fmt += 2;
       }
       else
@@ -70,7 +71,6 @@ static unsigned char *aws_sigv4_vslprintf(unsigned char *buf, unsigned char *las
     }
   }
   *c_ptr = '\0';
-finished:
   return c_ptr;
 }
 
@@ -158,6 +158,19 @@ static unsigned char *construct_query_str(unsigned char *dst_cstr,
   return dst_cstr;
 }
 
+/* a component without '=' (S3's ?uploads, ?acl, ...) is all key, signed as "key=" */
+static void end_query_component(aws_sigv4_kv_t *kv, unsigned char *end)
+{
+  if (kv->value.data != NULL)
+  {
+    kv->value.len = end - kv->value.data;
+  }
+  else
+  {
+    kv->key.len = end - kv->key.data;
+  }
+}
+
 /* parses at most AWS_SIGV4_MAX_NUM_QUERY_COMPONENTS components into query_params and
    returns the number parsed; a longer query string is rejected by the caller rather
    than silently signed without its trailing components */
@@ -178,7 +191,8 @@ static int parse_query_params(aws_sigv4_str_t *query_str,
   /* here we assume query string are well-formed */
   while (c_ptr != query_str->data + query_str->len)
   {
-    if (*c_ptr == '=')
+    /* the first '=' splits key from value, any later one belongs to the value */
+    if (*c_ptr == '=' && query_params[idx].value.data == NULL)
     {
       query_params[idx].key.len = c_ptr - query_params[idx].key.data;
       query_params[idx].value.data = ++c_ptr;
@@ -189,10 +203,7 @@ static int parse_query_params(aws_sigv4_str_t *query_str,
       {
         return AWS_SIGV4_BUFFER_OVERFLOW_ERROR;
       }
-      if (query_params[idx].value.data != NULL)
-      {
-        query_params[idx].value.len = c_ptr - query_params[idx].value.data;
-      }
+      end_query_component(&query_params[idx], c_ptr);
       query_params[++idx] = (aws_sigv4_kv_t){.key = {.data = ++c_ptr}};
     }
     else
@@ -200,10 +211,7 @@ static int parse_query_params(aws_sigv4_str_t *query_str,
       c_ptr++;
     }
   }
-  if (query_params[idx].value.data != NULL)
-  {
-    query_params[idx].value.len = c_ptr - query_params[idx].value.data;
-  }
+  end_query_component(&query_params[idx], c_ptr);
   *arr_len = idx + 1;
   return AWS_SIGV4_OK;
 }
